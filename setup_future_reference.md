@@ -29,6 +29,12 @@ High-level steps used to get this project to its current state. Use `1.` for all
    1. Edits to files under `components/ui/` are overwritten by re-running `shadcn add` for that component.
 1. Add Gemini for LLM-backed grading:
    1. Create an API key at aistudio.google.com/apikey; put it in `.env` (gitignored) as `GEMINI_API_KEY`.
+   1. Add the same `GEMINI_API_KEY` under the Vercel project's Settings → Environment Variables — `.env` is gitignored, so deploys have no key otherwise.
    1. `yarn add @google/genai`.
    1. For output whose shape must be guaranteed, use function calling: `client.interactions.create({ model, input, tools: [fn] })`, then read `interaction.steps` for entries with `type: "function_call"` and take `step.arguments`. The older `models.generateContent` + `responseSchema`/`responseMimeType` route is deprecated in favor of `response_format`.
    1. A function call constrains the shape only, never the values — validate the returned numbers and keep a deterministic fallback grader for anything missing or out of range.
+1. Host quiz media (images, audio) in a Vercel Blob store instead of the repo or Google Drive:
+   1. Vercel dashboard → Storage → Create Database → Blob, then connect it to the project.
+   1. Upload each file with public access; Vercel appends a random suffix, so the returned URL is unguessable.
+   1. Copy those URLs into the code — public-but-unguessable is what keeps unrevealed hint media unreachable, so hint URLs must live server-side only and never ship in the client bundle.
+   1. Google Drive share links don't work for this: `/file/d/<id>/view` serves a viewer page, and the `uc?export=download` form sends `Content-Disposition: attachment`, so media elements download the file instead of playing it.
