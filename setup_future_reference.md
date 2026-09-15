@@ -22,3 +22,13 @@ High-level steps used to get this project to its current state. Use `1.` for all
    1. Install `@ts-rest/core`, `@ts-rest/serverless`, and `zod` — but pin `zod` to v3 (`yarn add zod@3`), not v4: `@ts-rest/core`'s type inference reads zod's internal `ZodObject` generic shape, which changed in v4, so under v4 every route silently degrades to `any` instead of erroring loudly.
    1. App Router adapter: one catch-all route at `app/api/[...ts-rest]/route.ts`. Contract route paths are relative to that folder (e.g. `path: "/time"` for the URL `/api/time`), and `createNextHandler(...)` needs a `basePath: "/api"` option to strip that prefix before matching.
    1. `createNextHandler(...)` returns a single function, not one per HTTP method — assign it once and re-export it for every verb (`export { handler as GET, handler as POST, ... }`); destructuring `{ GET, POST } = createNextHandler(...)` silently makes every export `undefined`.
+1. Add shadcn/ui: `yarn dlx shadcn@latest init -d -y`, then `yarn dlx shadcn@latest add input label radio-group checkbox` (init also writes `components/ui/button.tsx` and `lib/utils.ts`).
+   1. Init rewrites `app/globals.css` wholesale — back up any custom `@keyframes` or `body` rules first and re-add them after. It also switches dark mode from `prefers-color-scheme` to a class-based `.dark`, so nothing goes dark until that class is set.
+   1. Its "Updating fonts" step leaves `--font-sans: var(--font-sans)` in `@theme inline`, a circular reference that resolves to nothing and drops all text to the browser's default serif. Point it at the real font variable (e.g. `var(--font-geist-sans)`).
+   1. This version generates Base UI (`@base-ui/react`) components, not Radix — props are `onValueChange`/`onCheckedChange`, not Radix's. `cn` comes from a standalone `cn` package, and `shadcn` itself becomes a runtime dependency because `globals.css` does `@import "shadcn/tailwind.css"`.
+   1. Edits to files under `components/ui/` are overwritten by re-running `shadcn add` for that component.
+1. Add Gemini for LLM-backed grading:
+   1. Create an API key at aistudio.google.com/apikey; put it in `.env` (gitignored) as `GEMINI_API_KEY`.
+   1. `yarn add @google/genai`.
+   1. For output whose shape must be guaranteed, use function calling: `client.interactions.create({ model, input, tools: [fn] })`, then read `interaction.steps` for entries with `type: "function_call"` and take `step.arguments`. The older `models.generateContent` + `responseSchema`/`responseMimeType` route is deprecated in favor of `response_format`.
+   1. A function call constrains the shape only, never the values — validate the returned numbers and keep a deterministic fallback grader for anything missing or out of range.
