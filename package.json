@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
+    "@google/genai": "^2.22.0",
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/serverless": "^3.52.1",
     "class-variance-authority": "^0.7.1",
