@@ -48,7 +48,7 @@ function getClient() {
  * by question id. Callers must treat missing or nonsensical ids as ungraded and
  * fall back — a function call constrains the shape, not the contents.
  */
-export async function askForScores(input: string) {
+export async function llmScore(input: string) {
   const interaction = await getClient().interactions.create({
     model: GRADER_MODEL,
     input,

@@ -1,41 +1,66 @@
 import { isNil } from "lodash";
-import { askForScores, GRADER_MODEL } from "@/lib/gemini";
+import type { Grade } from "@/lib/contracts/grader";
+import { GRADER_MODEL, llmScore } from "@/lib/gemini";
+import { totalHints } from "@/lib/hints";
 import {
-  CHECKBOX_CHOICES,
-  labelFor,
-  PROMPTS,
-  RADIO_CHOICES,
+  QUESTIONS,
+  type Attachment,
+  type Question,
   type Responses,
-  type QuestionKey,
-  type TextQuestion,
 } from "@/lib/quiz";
 
-const ANSWERS = {
-  q1: "wow",
-  q2: "San Diego",
-  q3: ["jaguar", "lion", "tiger", "leopard"],
-  q4: "blue rectangle",
-  q5: "theodore roosevelt",
+// Server-only. Nothing in this file may be imported by a client component: the
+// solutions below are the half of a question the user must not be able to read
+// before submitting.
+
+type Solution = {
+  /**
+   * Accepted answers. Choice questions list choice values; text questions list
+   * the answers worth full credit, most canonical first.
+   */
+  answers: string[];
+  /**
+   * How the model should score a free-text answer. Scores are always in
+   * quarters. Without one, a text question is graded by substring matching.
+   */
+  rubric?: string;
+  /** Shown in place of the question's attachments once the answer is revealed. */
+  revealAttachments?: Attachment[];
 };
 
-// Sent to the model alongside each answer. Scores are always in quarters.
-const RUBRICS: Record<Exclude<TextQuestion, "q1">, string> = {
-  q2: `The answer is San Diego.
+const SOLUTIONS: Record<string, Solution> = {
+  q1: { answers: ["wow"] },
+  q2: {
+    answers: ["San Diego", "La Jolla"],
+    rubric: `The answer is San Diego.
 "San Diego" scores 1, in any capitalisation and with or without ", CA".
 "La Jolla" also scores 1 — it is a neighbourhood of San Diego.
 Any other city or place scores 0.`,
-  q4: `The picture is a cyan rectangle. The answer has two halves worth 0.5 each: the colour and the shape.
-Colour: "blue", "cyan", or any other shade of blue earns its 0.5.
-Shape: "rectangle" earns its 0.5; "square" earns 0.25 instead.
-Add the halves together, so "blue rectangle" is 1 and "cyan square" is 0.75.`,
-  q5: `The speaker is Theodore Roosevelt.
+  },
+  q3: { answers: ["jaguar", "lion", "tiger", "leopard"] },
+  q4: {
+    answers: ["King of Diamonds"],
+    rubric: `The answer is the King of Diamonds. Scoring is all or nothing: 1 or 0, never a partial score.
+Both halves must be right. Naming only the rank ("king") or only the suit ("diamonds") scores 0.
+"King of Diamonds" scores 1 in any capitalisation.
+Readable shorthand also scores 1, in either order, with or without "of", and with the suit singular or plural: "K of diamonds", "K diamond", "king diamonds", "diamond king", "KD".
+Any other card scores 0.`,
+    revealAttachments: [
+      {
+        url: "https://aibnr2rvln5mpgsf.public.blob.vercel-storage.com/q4/ef502366-84bd-4e75-80db-495fc9dba3f9.jpg",
+        type: "image",
+      },
+    ],
+  },
+  q5: {
+    answers: ["Theodore Roosevelt"],
+    rubric: `The speaker is Theodore Roosevelt.
 "Theodore", "Theo", "Teddy", or a similar form of the first name scores 1, with or without the surname.
 "Roosevelt" alone scores 0.5.
 Any other Roosevelt — "Franklin Roosevelt", "FDR", "Eleanor" — scores 0, because it names the wrong person.
 Ignore minor misspellings of up to two letters; grade them as if spelled correctly.`,
+  },
 };
-
-const GRADED_BY_MODEL = ["q2", "q4", "q5"] as const;
 
 const PARTIAL_LENGTH_RATIO = 0.4;
 
@@ -43,20 +68,59 @@ function normalize(text: string) {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-/** Deterministic substring grader, used whenever the model can't be trusted. */
-function fallbackScore(response: string, answer: string) {
+function round(points: number) {
+  return Math.round(points * 100) / 100;
+}
+
+/** Text questions hold a single answer; anything past the first is ignored. */
+function textResponse(responses: Responses, id: string) {
+  return responses[id]?.[0] ?? "";
+}
+
+/**
+ * Cases a rule settles without the model: a blank answer, or an exact match
+ * against an accepted answer. Undefined when neither rule applies.
+ */
+function ruleBasedScore(response: string, answers: string[]) {
   const given = normalize(response);
-  const expected = normalize(answer);
-  if (given === expected) {
+  if (given === "") {
+    return 0;
+  }
+  if (answers.some((answer) => normalize(answer) === given)) {
     return 1;
   }
-  if (
-    given.length >= expected.length * PARTIAL_LENGTH_RATIO &&
-    expected.includes(given)
-  ) {
-    return 0.5;
+  return undefined;
+}
+
+/**
+ * A score the model reported, made usable — or undefined if it reported nothing
+ * usable. A function call constrains the shape, not the contents, so an
+ * out-of-range number is snapped and a missing or nonsensical one is rejected.
+ */
+function cleanUpScore(score: number | undefined) {
+  if (isNil(score) || !Number.isFinite(score)) {
+    return undefined;
   }
-  return 0;
+  return Math.round(Math.min(1, Math.max(0, score)) * 4) / 4;
+}
+
+/** Substring grader, used whenever the model can't be trusted or isn't asked. */
+function defaultScore(response: string, answers: string[]) {
+  const given = normalize(response);
+  const scores = answers.map((answer) => {
+    const expected = normalize(answer);
+    if (given === expected) {
+      return 1;
+    }
+    if (
+      given.length >= expected.length * PARTIAL_LENGTH_RATIO &&
+      expected.includes(given)
+    ) {
+      return 0.5;
+    }
+    return 0;
+  });
+  return Math.max(0, ...scores);
 }
 
 function gradeChoices(response: string[], answers: string[]) {
@@ -69,37 +133,15 @@ function gradeChoices(response: string[], answers: string[]) {
   return Math.max(0, points / expected.size);
 }
 
-/** Scores the model may report; anything else is snapped or rejected. */
-function cleanScore(score: number | undefined) {
-  if (isNil(score) || !Number.isFinite(score)) {
-    return undefined;
-  }
-  const snapped = Math.round(Math.min(1, Math.max(0, score)) * 4) / 4;
-  return snapped;
-}
-
-/** Cases settled without the model: blank answers and exact matches. */
-function shortcutScore(response: string, answer: string) {
-  const given = normalize(response);
-  if (given === "") {
-    return 0;
-  }
-  if (given === normalize(answer)) {
-    return 1;
-  }
-  return undefined;
-}
-
-function buildInput(pending: TextQuestion[], responses: Responses) {
-  const blocks = pending.map((key) => {
-    const answer = ANSWERS[key];
-    const rubric = RUBRICS[key as Exclude<TextQuestion, "q1">];
+function buildInput(pending: Question[], responses: Responses) {
+  const blocks = pending.map((question) => {
+    const solution = SOLUTIONS[question.id];
     return [
-      `Question id: ${key}`,
-      `Question: ${PROMPTS[key]}`,
-      `Expected answer: ${answer}`,
-      `Rubric:\n${rubric}`,
-      `Student answer: ${responses[key]}`,
+      `Question id: ${question.id}`,
+      `Question: ${question.label}`,
+      `Expected answer: ${solution.answers.join(" / ")}`,
+      `Rubric:\n${solution.rubric}`,
+      `Student answer: ${textResponse(responses, question.id)}`,
     ].join("\n");
   });
 
@@ -112,25 +154,31 @@ function buildInput(pending: TextQuestion[], responses: Responses) {
   ].join("\n");
 }
 
-export type GradedQuestion = { points: number; answer: string };
-
 export async function gradeQuiz(responses: Responses) {
-  const scores: Record<QuestionKey, number> = {
-    q1: fallbackScore(responses.q1, ANSWERS.q1),
-    q2: 0,
-    q3: gradeChoices(responses.q3, ANSWERS.q3),
-    q4: 0,
-    q5: 0,
-  };
+  // Fraction of the question's points earned, keyed by question id.
+  const fractions: Record<string, number> = {};
 
-  // Only the answers no shortcut could settle are worth a model call.
-  const pending: TextQuestion[] = [];
-  for (const key of GRADED_BY_MODEL) {
-    const shortcut = shortcutScore(responses[key], ANSWERS[key]);
-    if (isNil(shortcut)) {
-      pending.push(key);
+  // Only free-text answers need the model, and only those no rule settles.
+  const pending: Question[] = [];
+  for (const question of QUESTIONS) {
+    const { answers, rubric } = SOLUTIONS[question.id];
+
+    if (question.type !== "text") {
+      fractions[question.id] = gradeChoices(
+        responses[question.id] ?? [],
+        answers,
+      );
+      continue;
+    }
+
+    const response = textResponse(responses, question.id);
+    const ruled = ruleBasedScore(response, answers);
+    if (!isNil(ruled)) {
+      fractions[question.id] = ruled;
+    } else if (isNil(rubric)) {
+      fractions[question.id] = defaultScore(response, answers);
     } else {
-      scores[key] = shortcut;
+      pending.push(question);
     }
   }
 
@@ -141,23 +189,28 @@ export async function gradeQuiz(responses: Responses) {
     let reported = new Map<string, number>();
     let failed = false;
     try {
-      reported = await askForScores(buildInput(pending, responses));
+      reported = await llmScore(buildInput(pending, responses));
     } catch {
       failed = true;
     }
 
     const fellBack: string[] = [];
-    for (const key of pending) {
-      const score = cleanScore(reported.get(key));
+    for (const question of pending) {
+      const score = cleanUpScore(reported.get(question.id));
       if (isNil(score)) {
-        fellBack.push(key);
-        scores[key] = fallbackScore(responses[key], ANSWERS[key]);
+        fellBack.push(question.id);
+        fractions[question.id] = defaultScore(
+          textResponse(responses, question.id),
+          SOLUTIONS[question.id].answers,
+        );
       } else {
-        scores[key] = score;
+        fractions[question.id] = score;
       }
     }
 
-    const graded = pending.filter((key) => !fellBack.includes(key));
+    const graded = pending
+      .map((question) => question.id)
+      .filter((id) => !fellBack.includes(id));
     summary = [
       graded.length > 0
         ? `${GRADER_MODEL} graded ${graded.join(", ")}.`
@@ -172,16 +225,18 @@ export async function gradeQuiz(responses: Responses) {
       .join(" ");
   }
 
-  const results: Record<QuestionKey, GradedQuestion> = {
-    q1: { points: scores.q1, answer: labelFor(RADIO_CHOICES, ANSWERS.q1) },
-    q2: { points: scores.q2, answer: `${ANSWERS.q2} (or La Jolla)` },
-    q3: {
-      points: scores.q3,
-      answer: ANSWERS.q3.map((v) => labelFor(CHECKBOX_CHOICES, v)).join(", "),
-    },
-    q4: { points: scores.q4, answer: ANSWERS.q4 },
-    q5: { points: scores.q5, answer: ANSWERS.q5 },
-  };
+  const grades: Record<string, Grade> = Object.fromEntries(
+    QUESTIONS.map((question) => {
+      const solution = SOLUTIONS[question.id];
+      const grade: Grade = {
+        correctAnswer: solution.answers,
+        pointsEarned: round(fractions[question.id] * question.pointsWorth),
+        totalHints: totalHints(question.id),
+        attachments: solution.revealAttachments,
+      };
+      return [question.id, grade];
+    }),
+  );
 
-  return { results, summary };
+  return { grades, summary };
 }
