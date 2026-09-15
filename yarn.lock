@@ -1500,6 +1500,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/pluralize@npm:^0.0.33":
+  version: 0.0.33
+  resolution: "@types/pluralize@npm:0.0.33"
+  checksum: 10c0/24899caf85b79dd291a6b6e9b9f3b67b452b18d578d0ac0d531a705bf5ee0361d9386ea1f8532c64de9e22c6e9606c5497787bb5e31bd299c487980436c59785
+  languageName: node
+  linkType: hard
+
 "@types/react-dom@npm:^19":
   version: 19.2.7
   resolution: "@types/react-dom@npm:19.2.7"
@@ -5481,6 +5488,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"pluralize@npm:^8.0.0":
+  version: 8.0.0
+  resolution: "pluralize@npm:8.0.0"
+  checksum: 10c0/2044cfc34b2e8c88b73379ea4a36fc577db04f651c2909041b054c981cd863dd5373ebd030123ab058d194ae615d3a97cfdac653991e499d10caf592e8b3dc33
+  languageName: node
+  linkType: hard
+
 "possible-typed-array-names@npm:^1.0.0, possible-typed-array-names@npm:^1.1.0":
   version: 1.1.0
   resolution: "possible-typed-array-names@npm:1.1.0"
@@ -6203,6 +6217,7 @@ __metadata:
     "@ts-rest/serverless": "npm:^3.52.1"
     "@types/lodash": "npm:^4.17.25"
     "@types/node": "npm:^20"
+    "@types/pluralize": "npm:^0.0.33"
     "@types/react": "npm:^19"
     "@types/react-dom": "npm:^19"
     class-variance-authority: "npm:^0.7.1"
@@ -6212,6 +6227,7 @@ __metadata:
     lodash: "npm:^4.18.1"
     lucide-react: "npm:^1.46.0"
     next: "npm:16.3.4"
+    pluralize: "npm:^8.0.0"
     react: "npm:19.2.8"
     react-dom: "npm:19.2.8"
     shadcn: "npm:^4.21.0"
