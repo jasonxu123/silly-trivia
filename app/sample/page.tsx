@@ -1,50 +1,65 @@
 "use client";
 
 import { useState } from "react";
-import { LoaderCircleIcon } from "lucide-react";
+import { CircleQuestionMarkIcon, LoaderCircleIcon } from "lucide-react";
 import { isNil } from "lodash";
+import pluralize from "pluralize";
 import { apiClient } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { cn } from "@/lib/utils";
 import {
-  AUDIO_URL,
-  CHECKBOX_CHOICES,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import type { Grade, Hint } from "@/lib/contracts/grader";
+import {
+  answerLabels,
   EMPTY_RESPONSES,
-  PROMPTS,
-  RADIO_CHOICES,
-  QUESTION_KEYS,
-  type QuestionKey,
+  maxPoints,
+  pointsAfterHints,
+  QUESTIONS,
+  TOTAL_POINTS,
+  type Attachment,
+  type GradedQuestion,
+  type Question,
   type Responses,
-  type TextQuestion,
 } from "@/lib/quiz";
-
-type Results = Record<QuestionKey, { points: number; answer: string }>;
 
 const GRADING_TIMEOUT_MS = 10_000;
 
 const REVEAL_CLASS = "animate-[reveal_250ms_ease-out]";
 const CONCEAL_CLASS = "animate-[conceal_60ms_ease-in_forwards]";
 
-const LIST_FORMAT = new Intl.ListFormat("en", {
+const AND_LIST = new Intl.ListFormat("en", {
   style: "long",
   type: "conjunction",
 });
 
-function unansweredQuestions(responses: Responses) {
-  return QUESTION_KEYS.flatMap((key, index) => {
-    const response = responses[key];
-    const empty = Array.isArray(response)
-      ? response.length === 0
-      : response.trim() === "";
-    return empty ? index + 1 : [];
-  });
+const OR_LIST = new Intl.ListFormat("en", {
+  style: "long",
+  type: "disjunction",
+});
+
+function round(points: number) {
+  return Math.round(points * 100) / 100;
 }
 
-function Question({
+function unansweredQuestions(responses: Responses) {
+  return QUESTIONS.flatMap((question, index) =>
+    responses[question.id].length === 0 ? index + 1 : [],
+  );
+}
+
+function isGraded(question: Question | GradedQuestion): question is GradedQuestion {
+  return "pointsEarned" in question;
+}
+
+function QuestionRow({
   number,
   children,
 }: {
@@ -59,47 +74,190 @@ function Question({
   );
 }
 
-function TextAnswer({
-  id,
-  label,
-  value,
-  disabled,
+function Attachments({ attachments }: { attachments: Attachment[] }) {
+  return attachments.map((attachment) =>
+    attachment.type === "audio" ? (
+      <audio
+        key={attachment.url}
+        controls
+        controlsList="nodownload"
+        src={attachment.url}
+        className="w-full max-w-80"
+      />
+    ) : (
+      // Attachment URLs are arbitrary, so they can't be declared in next/image's remote patterns.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        key={attachment.url}
+        src={attachment.url}
+        alt=""
+        className="w-full max-w-80"
+      />
+    ),
+  );
+}
+
+/** Correct choices are tinted once the grade is in, so the answer is visible in place. */
+function choiceClass(question: Question | GradedQuestion, value: string) {
+  if (!isGraded(question) || !question.correctAnswer.includes(value)) {
+    return undefined;
+  }
+  return "text-green-700";
+}
+
+function Answer({
+  question,
+  response,
   onChange,
 }: {
-  id: TextQuestion;
-  label: string;
-  value: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
+  question: Question | GradedQuestion;
+  response: string[];
+  onChange: (response: string[]) => void;
 }) {
-  return (
-    <>
-      <div>{label}</div>
+  const disabled = isGraded(question);
+
+  if (question.type === "text") {
+    return (
       <Input
-        id={id}
-        name={id}
+        id={question.id}
+        name={question.id}
         type="text"
-        aria-label={label}
+        aria-label={question.label}
         maxLength={100}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
-        value={value}
+        value={response[0] ?? ""}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onChange([event.target.value])}
       />
-    </>
+    );
+  }
+
+  if (question.type === "single") {
+    return (
+      <RadioGroup
+        name={question.id}
+        value={response[0] ?? ""}
+        disabled={disabled}
+        onValueChange={(value) => onChange([String(value)])}
+      >
+        {question.choices.map(({ value, label }) => (
+          <Label
+            key={value}
+            className={cn("cursor-pointer", choiceClass(question, value))}
+          >
+            <RadioGroupItem value={value} />
+            {label}
+          </Label>
+        ))}
+      </RadioGroup>
+    );
+  }
+
+  const toggle = (value: string) =>
+    onChange(
+      response.includes(value)
+        ? response.filter((other) => other !== value)
+        : [...response, value],
+    );
+
+  return (
+    <div className="grid grid-flow-col grid-cols-2 grid-rows-3 gap-x-8 gap-y-2">
+      {question.choices.map(({ value, label }) => (
+        <Label
+          key={value}
+          className={cn("cursor-pointer", choiceClass(question, value))}
+        >
+          <Checkbox
+            name={question.id}
+            value={value}
+            checked={response.includes(value)}
+            disabled={disabled}
+            onCheckedChange={() => toggle(value)}
+          />
+          {label}
+        </Label>
+      ))}
+    </div>
   );
 }
 
-function Reveal({
-  resetting,
-  children,
+/**
+ * Asks for the next hint. The question's own hasHint decides whether it shows,
+ * so it disappears by itself once the last hint has been taken.
+ */
+function HintButton({
+  question,
+  hintsUsed,
+  pending,
+  onAskForHint,
 }: {
-  resetting: boolean;
-  children: React.ReactNode;
+  question: Question;
+  hintsUsed: number;
+  pending: boolean;
+  onAskForHint: () => void;
 }) {
+  const penalty = question.hintPenalty ?? 0;
+  const remaining = maxPoints(question, hintsUsed);
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={pending}
+        onClick={onAskForHint}
+      >
+        {hintsUsed === 0 ? "Get hint" : "Get another hint"}
+        {pending && <LoaderCircleIcon className="animate-spin" />}
+      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="How hints affect your score"
+              className="text-muted-foreground hover:text-foreground"
+            />
+          }
+        >
+          <CircleQuestionMarkIcon className="size-4" />
+        </TooltipTrigger>
+        <TooltipContent>
+          Each hint you ask for lowers the points this question can earn, by{" "}
+          {penalty}. It is currently worth up to {round(remaining)} of{" "}
+          {question.pointsWorth}.
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+function Feedback({
+  question,
+  hintsUsed,
+  resetting,
+}: {
+  question: GradedQuestion;
+  hintsUsed: number;
+  resetting: boolean;
+}) {
+  const { pointsEarned, pointsWorth } = question;
+  // Correct/partial/incorrect describes the answer, so it reads the graded
+  // fraction; the points shown are what the hints taken left it worth.
+  const fraction = pointsWorth > 0 ? pointsEarned / pointsWorth : 0;
+  const earned = round(pointsAfterHints(question, hintsUsed));
+  const full = fraction >= 1;
+  const partial = fraction > 0 && !full;
+
+  // Choice answers read as a set; text answers as alternatives that all score full marks.
+  const labels = answerLabels(question, question.correctAnswer);
+  const answer =
+    question.type === "text" ? OR_LIST.format(labels) : AND_LIST.format(labels);
+
   return (
     <div
       className={cn(
@@ -107,50 +265,65 @@ function Reveal({
         resetting ? CONCEAL_CLASS : REVEAL_CLASS,
       )}
     >
-      <div className="overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
-function Feedback({ points, answer }: { points: number; answer: string }) {
-  const rounded = Math.round(points * 100) / 100;
-  if (points === 1) {
-    return <div className="font-semibold text-green-700">✓ Correct! 1 / 1</div>;
-  }
-  const partial = points > 0;
-  return (
-    <div
-      className={cn(
-        "font-semibold",
-        partial ? "text-amber-600" : "text-red-700",
-      )}
-    >
-      {partial
-        ? `◐ Partial points ${rounded} / 1`
-        : `✗ Incorrect 😭 ${rounded} / 1`}
-      <div>answer: {answer}</div>
+      <div className="overflow-hidden">
+        <div
+          className={cn(
+            "font-semibold",
+            full
+              ? "text-green-700"
+              : partial
+                ? "text-amber-600"
+                : "text-red-700",
+          )}
+        >
+          {full
+            ? `✓ Correct! ${earned} / ${pointsWorth}`
+            : partial
+              ? `◐ Partial: ${earned} / ${pointsWorth}`
+              : `✗ Incorrect: ${earned} / ${pointsWorth}`}
+          <div>answer: {answer}</div>
+          {hintsUsed > 0 && (
+            <div className="font-normal text-muted-foreground">
+              {hintsUsed} {pluralize("hint", hintsUsed)} used of{" "}
+              {question.totalHints}, capping this question at{" "}
+              {round(maxPoints(question, hintsUsed))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
 export default function Sample() {
   const [responses, setResponses] = useState<Responses>(EMPTY_RESPONSES);
-  const [results, setResults] = useState<Results | null>(null);
+  const [grades, setGrades] = useState<Record<string, Grade> | null>(null);
+  // Hints revealed so far, keyed by question id. Client-only for now, so the
+  // penalty is only as honest as the browser — server-side state replaces this.
+  const [hints, setHints] = useState<Record<string, Hint>>({});
+  const [hintsUsed, setHintsUsed] = useState<Record<string, number>>({});
+  const [hintPending, setHintPending] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const setText = (question: TextQuestion, value: string) => {
-    setResponses((current) => ({ ...current, [question]: value }));
+  const setResponse = (id: string, response: string[]) => {
+    setResponses((current) => ({ ...current, [id]: response }));
   };
 
-  const toggleChoice = (choice: string) => {
-    setResponses((current) => ({
-      ...current,
-      q3: current.q3.includes(choice)
-        ? current.q3.filter((other) => other !== choice)
-        : [...current.q3, choice],
-    }));
+  const onAskForHint = async (id: string) => {
+    setHintPending(id);
+    const outcome = await apiClient
+      .getHint({ body: { questionId: id, hintIndex: hintsUsed[id] ?? 0 } })
+      .catch(() => "failed" as const);
+    setHintPending(null);
+
+    if (outcome === "failed" || outcome.status !== 200) {
+      return;
+    }
+
+    setHints((current) => ({ ...current, [id]: outcome.body }));
+    setHintsUsed((current) => ({ ...current, [id]: (current[id] ?? 0) + 1 }));
   };
 
   const onSubmit = async (event: React.FormEvent) => {
@@ -158,8 +331,8 @@ export default function Sample() {
 
     const unanswered = unansweredQuestions(responses);
     if (unanswered.length > 0) {
-      const noun = unanswered.length > 1 ? "questions" : "question";
-      const list = LIST_FORMAT.format(unanswered.map(String));
+      const noun = pluralize("question", unanswered.length);
+      const list = AND_LIST.format(unanswered.map(String));
       if (
         !window.confirm(
           `Are you sure you want to submit empty answers for ${noun} ${list}?`,
@@ -175,7 +348,7 @@ export default function Sample() {
     // Promise.race drops the loser's value, so a response arriving after the
     // timeout is discarded rather than landing on a page that moved on.
     const call = apiClient
-      .gradeQuiz({ body: responses })
+      .gradeQuiz({ body: { responses } })
       .catch(() => "failed" as const);
     const timeout = new Promise<"failed">((resolve) =>
       setTimeout(() => resolve("failed"), GRADING_TIMEOUT_MS),
@@ -189,7 +362,7 @@ export default function Sample() {
       return;
     }
 
-    setResults(outcome.body.results);
+    setGrades(outcome.body.grades);
   };
 
   // The fade-out has to finish before React unmounts the feedback, so clearing
@@ -198,17 +371,42 @@ export default function Sample() {
 
   const onConcealed = () => {
     setResponses(EMPTY_RESPONSES);
-    setResults(null);
+    setGrades(null);
+    setHints({});
+    setHintsUsed({});
     setResetting(false);
     setFailed(false);
   };
 
-  const graded = !isNil(results);
-  const total = results
-    ? Math.round(
-        Object.values(results).reduce((sum, { points }) => sum + points, 0) *
-          100,
-      ) / 100
+  // A question, the last hint taken for it, and its grade are one object. Each
+  // layer replaces what the one before it was showing, so the newest attachments
+  // and the current hasHint always win.
+  const questions: (Question | GradedQuestion)[] = QUESTIONS.map((question) => {
+    const hint = hints[question.id];
+    const grade = grades?.[question.id];
+    const merged = isNil(hint) ? question : { ...question, ...hint };
+    if (isNil(grade)) {
+      return merged;
+    }
+    // A reveal without its own attachments leaves the hinted ones in place.
+    return {
+      ...merged,
+      ...grade,
+      attachments: grade.attachments ?? merged.attachments,
+    };
+  });
+
+  const graded = !isNil(grades);
+  const total = graded
+    ? round(
+        questions.reduce(
+          (sum, question) =>
+            isGraded(question)
+              ? sum + pointsAfterHints(question, hintsUsed[question.id] ?? 0)
+              : sum,
+          0,
+        ),
+      )
     : 0;
 
   return (
@@ -216,7 +414,7 @@ export default function Sample() {
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1">
           <div className="text-2xl font-semibold">Sample quiz</div>
-          {results && (
+          {graded && (
             <div
               className={cn(
                 "text-xl font-semibold text-indigo-800",
@@ -224,7 +422,7 @@ export default function Sample() {
               )}
               onAnimationEnd={resetting ? onConcealed : undefined}
             >
-              Score: {total} / 5
+              Score: {total} / {TOTAL_POINTS}
             </div>
           )}
         </div>
@@ -238,102 +436,39 @@ export default function Sample() {
 
       <form className="flex flex-col gap-8" onSubmit={onSubmit}>
         <ol className="grid grid-cols-[repeat(auto-fit,minmax(22rem,1fr))] gap-8">
-          <Question number={1}>
-            <div>{PROMPTS.q1}</div>
-            <RadioGroup
-              name="q1"
-              value={responses.q1}
-              disabled={graded}
-              onValueChange={(value) => setText("q1", String(value))}
-            >
-              {RADIO_CHOICES.map(({ value, label }) => (
-                <Label key={value} className="cursor-pointer">
-                  <RadioGroupItem value={value} />
-                  {label}
-                </Label>
-              ))}
-            </RadioGroup>
-            {results && (
-              <Reveal resetting={resetting}>
-                <Feedback {...results.q1} />
-              </Reveal>
-            )}
-          </Question>
-
-          <Question number={2}>
-            <TextAnswer
-              id="q2"
-              label={PROMPTS.q2}
-              value={responses.q2}
-              disabled={graded}
-              onChange={(value) => setText("q2", value)}
-            />
-            {results && (
-              <Reveal resetting={resetting}>
-                <Feedback {...results.q2} />
-              </Reveal>
-            )}
-          </Question>
-
-          <Question number={3}>
-            <div>{PROMPTS.q3}</div>
-            <div className="grid grid-flow-col grid-cols-2 grid-rows-3 gap-x-8 gap-y-2">
-              {CHECKBOX_CHOICES.map(({ value, label }) => (
-                <Label key={value} className="cursor-pointer">
-                  <Checkbox
-                    name="q3"
-                    value={value}
-                    checked={responses.q3.includes(value)}
-                    disabled={graded}
-                    onCheckedChange={() => toggleChoice(value)}
-                  />
-                  {label}
-                </Label>
-              ))}
-            </div>
-            {results && (
-              <Reveal resetting={resetting}>
-                <Feedback {...results.q3} />
-              </Reveal>
-            )}
-          </Question>
-
-          <Question number={4}>
-            <div className="h-48 w-full max-w-80 bg-cyan-400" />
-            <TextAnswer
-              id="q4"
-              label={PROMPTS.q4}
-              value={responses.q4}
-              disabled={graded}
-              onChange={(value) => setText("q4", value)}
-            />
-            {results && (
-              <Reveal resetting={resetting}>
-                <Feedback {...results.q4} />
-              </Reveal>
-            )}
-          </Question>
-
-          <Question number={5}>
-            <audio
-              controls
-              controlsList="nodownload"
-              src={AUDIO_URL}
-              className="w-full max-w-80"
-            />
-            <TextAnswer
-              id="q5"
-              label={PROMPTS.q5}
-              value={responses.q5}
-              disabled={graded}
-              onChange={(value) => setText("q5", value)}
-            />
-            {results && (
-              <Reveal resetting={resetting}>
-                <Feedback {...results.q5} />
-              </Reveal>
-            )}
-          </Question>
+          {questions.map((question, index) => (
+            <QuestionRow key={question.id} number={index + 1}>
+              <div>{question.label}</div>
+              {question.attachments && (
+                <Attachments attachments={question.attachments} />
+              )}
+              <Answer
+                question={question}
+                response={responses[question.id]}
+                onChange={(response) => setResponse(question.id, response)}
+              />
+              {question.hintLabel && (
+                <div className="text-muted-foreground">
+                  hint: {question.hintLabel}
+                </div>
+              )}
+              {question.hasHint && !graded && (
+                <HintButton
+                  question={question}
+                  hintsUsed={hintsUsed[question.id] ?? 0}
+                  pending={hintPending === question.id}
+                  onAskForHint={() => onAskForHint(question.id)}
+                />
+              )}
+              {isGraded(question) && (
+                <Feedback
+                  question={question}
+                  hintsUsed={hintsUsed[question.id] ?? 0}
+                  resetting={resetting}
+                />
+              )}
+            </QuestionRow>
+          ))}
         </ol>
 
         {graded ? (
