@@ -35,6 +35,7 @@ const SOLUTIONS: Record<string, Solution> = {
     rubric: `The answer is San Diego.
 "San Diego" scores 1, in any capitalisation and with or without ", CA".
 "La Jolla" also scores 1 — it is a neighbourhood of San Diego.
+Ignore minor misspellings of up to one letter; grade them as if spelled correctly.
 Any other city or place scores 0.`,
   },
   q3: { answers: ["jaguar", "lion", "tiger", "leopard"] },
@@ -55,7 +56,7 @@ Any other card scores 0.`,
   q5: {
     answers: ["Theodore Roosevelt"],
     rubric: `The speaker is Theodore Roosevelt.
-"Theodore", "Theo", "Teddy", or a similar form of the first name scores 1, with or without the surname.
+"Theodore", "Teddy", or a similar form of the first name scores 1, with or without the surname.
 "Roosevelt" alone scores 0.5.
 Any other Roosevelt — "Franklin Roosevelt", "FDR", "Eleanor" — scores 0, because it names the wrong person.
 Ignore minor misspellings of up to two letters; grade them as if spelled correctly.`,
