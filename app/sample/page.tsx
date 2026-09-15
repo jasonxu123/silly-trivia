@@ -1,52 +1,29 @@
 "use client";
 
 import { useState } from "react";
+import { LoaderCircleIcon } from "lucide-react";
+import { apiClient } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { cn } from "@/lib/utils";
+import {
+  AUDIO_URL,
+  CHECKBOX_CHOICES,
+  EMPTY_RESPONSES,
+  PROMPTS,
+  RADIO_CHOICES,
+  QUESTION_KEYS,
+  type QuestionKey,
+  type Responses,
+  type TextQuestion,
+} from "@/lib/quiz";
 
-const CHOICES = ["A", "B", "C", "D", "E"];
+type Results = Record<QuestionKey, { points: number; answer: string }>;
 
-const CHECKBOX_CHOICES = [
-  { value: "alpha", label: "α" },
-  { value: "beta", label: "β" },
-  { value: "gamma", label: "γ" },
-  { value: "delta", label: "δ" },
-  { value: "epsilon", label: "ε" },
-  { value: "zeta", label: "ζ" },
-];
-
-function greekLabel(value: string) {
-  return CHECKBOX_CHOICES.find((choice) => choice.value === value)?.label ?? value;
-}
-
-const AUDIO_URL =
-  "https://tile.loc.gov/storage-services/public/navcc/trrs-1146/trrs-1146.mp3";
-
-const ANSWERS = {
-  q1: "E",
-  q2: "hello world!",
-  q3: ["alpha", "gamma", "delta", "epsilon"],
-  q4: "blue rectangle",
-  q5: "theodore roosevelt",
-};
-
-const EMPTY_RESPONSES = {
-  q1: "",
-  q2: "",
-  q3: [] as string[],
-  q4: "",
-  q5: "",
-};
-
-type Responses = typeof EMPTY_RESPONSES;
-type TextQuestion = "q1" | "q2" | "q4" | "q5";
-type Results = Record<keyof Responses, number>;
-
-const QUESTION_KEYS = ["q1", "q2", "q3", "q4", "q5"] as const;
+const GRADING_TIMEOUT_MS = 10_000;
 
 const REVEAL_CLASS = "animate-[reveal_250ms_ease-out]";
 const CONCEAL_CLASS = "animate-[conceal_60ms_ease-in_forwards]";
@@ -64,47 +41,6 @@ function unansweredQuestions(responses: Responses) {
       : response.trim() === "";
     return empty ? index + 1 : [];
   });
-}
-
-function normalize(text: string) {
-  return text.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-const PARTIAL_LENGTH_RATIO = 0.4;
-
-function gradeText(response: string, answer: string) {
-  const given = normalize(response);
-  const expected = normalize(answer);
-  if (given === expected) {
-    return 1;
-  }
-  if (
-    given.length >= expected.length * PARTIAL_LENGTH_RATIO &&
-    expected.includes(given)
-  ) {
-    return 0.5;
-  }
-  return 0;
-}
-
-function gradeChoices(response: string[], answers: string[]) {
-  const expected = new Set(answers.map(normalize));
-  const chosen = new Set(response.map(normalize));
-  let points = 0;
-  for (const choice of chosen) {
-    points += expected.has(choice) ? 1 : -1;
-  }
-  return Math.max(0, points / expected.size);
-}
-
-function grade(responses: Responses): Results {
-  return {
-    q1: gradeText(responses.q1, ANSWERS.q1),
-    q2: gradeText(responses.q2, ANSWERS.q2),
-    q3: gradeChoices(responses.q3, ANSWERS.q3),
-    q4: gradeText(responses.q4, ANSWERS.q4),
-    q5: gradeText(responses.q5, ANSWERS.q5),
-  };
 }
 
 function Question({
@@ -200,6 +136,8 @@ export default function Sample() {
   const [responses, setResponses] = useState<Responses>(EMPTY_RESPONSES);
   const [results, setResults] = useState<Results | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const setText = (question: TextQuestion, value: string) => {
     setResponses((current) => ({ ...current, [question]: value }));
@@ -214,7 +152,7 @@ export default function Sample() {
     }));
   };
 
-  const onSubmit = (event: React.FormEvent) => {
+  const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
     const unanswered = unansweredQuestions(responses);
@@ -230,7 +168,27 @@ export default function Sample() {
       }
     }
 
-    setResults(grade(responses));
+    setPending(true);
+    setFailed(false);
+
+    // Promise.race drops the loser's value, so a response arriving after the
+    // timeout is discarded rather than landing on a page that moved on.
+    const call = apiClient
+      .gradeQuiz({ body: responses })
+      .catch(() => "failed" as const);
+    const timeout = new Promise<"failed">((resolve) =>
+      setTimeout(() => resolve("failed"), GRADING_TIMEOUT_MS),
+    );
+    const outcome = await Promise.race([call, timeout]);
+
+    setPending(false);
+
+    if (outcome === "failed" || outcome.status !== 200) {
+      setFailed(true);
+      return;
+    }
+
+    setResults(outcome.body.results);
   };
 
   // The fade-out has to finish before React unmounts the feedback, so clearing
@@ -241,27 +199,38 @@ export default function Sample() {
     setResponses(EMPTY_RESPONSES);
     setResults(null);
     setResetting(false);
+    setFailed(false);
   };
 
   const graded = results !== null;
   const total = results
-    ? Math.round(Object.values(results).reduce((sum, n) => sum + n, 0) * 100) /
-      100
+    ? Math.round(
+        Object.values(results).reduce((sum, { points }) => sum + points, 0) *
+          100,
+      ) / 100
     : 0;
 
   return (
     <main className="mx-auto flex w-full max-w-304 flex-col gap-8 p-8 font-sans">
-      <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1">
-        <div className="text-2xl font-semibold">Sample quiz</div>
-        {results && (
-          <div
-            className={cn(
-              "text-xl font-semibold text-indigo-800",
-              resetting ? CONCEAL_CLASS : REVEAL_CLASS,
-            )}
-            onAnimationEnd={resetting ? onConcealed : undefined}
-          >
-            Score: {total} / 5
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1">
+          <div className="text-2xl font-semibold">Sample quiz</div>
+          {results && (
+            <div
+              className={cn(
+                "text-xl font-semibold text-indigo-800",
+                resetting ? CONCEAL_CLASS : REVEAL_CLASS,
+              )}
+              onAnimationEnd={resetting ? onConcealed : undefined}
+            >
+              Score: {total} / 5
+            </div>
+          )}
+        </div>
+
+        {failed && (
+          <div className={cn("font-semibold text-red-700", REVEAL_CLASS)}>
+            Error grading answers :(
           </div>
         )}
       </div>
@@ -269,23 +238,23 @@ export default function Sample() {
       <form className="flex flex-col gap-8" onSubmit={onSubmit}>
         <ol className="grid grid-cols-[repeat(auto-fit,minmax(22rem,1fr))] gap-8">
           <Question number={1}>
-            <div>Here is the first question.</div>
+            <div>{PROMPTS.q1}</div>
             <RadioGroup
               name="q1"
               value={responses.q1}
               disabled={graded}
               onValueChange={(value) => setText("q1", String(value))}
             >
-              {CHOICES.map((choice) => (
-                <Label key={choice} className="cursor-pointer">
-                  <RadioGroupItem value={choice} />
-                  {choice}
+              {RADIO_CHOICES.map(({ value, label }) => (
+                <Label key={value} className="cursor-pointer">
+                  <RadioGroupItem value={value} />
+                  {label}
                 </Label>
               ))}
             </RadioGroup>
             {results && (
               <Reveal resetting={resetting}>
-                <Feedback points={results.q1} answer={ANSWERS.q1} />
+                <Feedback {...results.q1} />
               </Reveal>
             )}
           </Question>
@@ -293,20 +262,20 @@ export default function Sample() {
           <Question number={2}>
             <TextAnswer
               id="q2"
-              label="Put in a short answer here."
+              label={PROMPTS.q2}
               value={responses.q2}
               disabled={graded}
               onChange={(value) => setText("q2", value)}
             />
             {results && (
               <Reveal resetting={resetting}>
-                <Feedback points={results.q2} answer={ANSWERS.q2} />
+                <Feedback {...results.q2} />
               </Reveal>
             )}
           </Question>
 
           <Question number={3}>
-            <div>Choose as many as you want.</div>
+            <div>{PROMPTS.q3}</div>
             <div className="grid grid-flow-col grid-cols-2 grid-rows-3 gap-x-8 gap-y-2">
               {CHECKBOX_CHOICES.map(({ value, label }) => (
                 <Label key={value} className="cursor-pointer">
@@ -323,10 +292,7 @@ export default function Sample() {
             </div>
             {results && (
               <Reveal resetting={resetting}>
-                <Feedback
-                  points={results.q3}
-                  answer={ANSWERS.q3.map(greekLabel).join(", ")}
-                />
+                <Feedback {...results.q3} />
               </Reveal>
             )}
           </Question>
@@ -335,14 +301,14 @@ export default function Sample() {
             <div className="h-48 w-full max-w-80 bg-cyan-400" />
             <TextAnswer
               id="q4"
-              label="What's in this picture?"
+              label={PROMPTS.q4}
               value={responses.q4}
               disabled={graded}
               onChange={(value) => setText("q4", value)}
             />
             {results && (
               <Reveal resetting={resetting}>
-                <Feedback points={results.q4} answer={ANSWERS.q4} />
+                <Feedback {...results.q4} />
               </Reveal>
             )}
           </Question>
@@ -356,14 +322,14 @@ export default function Sample() {
             />
             <TextAnswer
               id="q5"
-              label="Who is speaking?"
+              label={PROMPTS.q5}
               value={responses.q5}
               disabled={graded}
               onChange={(value) => setText("q5", value)}
             />
             {results && (
               <Reveal resetting={resetting}>
-                <Feedback points={results.q5} answer={ANSWERS.q5} />
+                <Feedback {...results.q5} />
               </Reveal>
             )}
           </Question>
@@ -380,8 +346,14 @@ export default function Sample() {
             Reset
           </Button>
         ) : (
-          <Button key="submit" type="submit" className="ml-8 self-start">
-            Submit
+          <Button
+            key="submit"
+            type="submit"
+            className="ml-8 self-start"
+            disabled={pending}
+          >
+            {pending ? "Grading..." : "Submit"}
+            {pending && <LoaderCircleIcon className="animate-spin" />}
           </Button>
         )}
       </form>
