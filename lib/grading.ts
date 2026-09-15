@@ -1,3 +1,4 @@
+import { isNil } from "lodash";
 import { askForScores, GRADER_MODEL } from "@/lib/gemini";
 import {
   CHECKBOX_CHOICES,
@@ -70,7 +71,7 @@ function gradeChoices(response: string[], answers: string[]) {
 
 /** Scores the model may report; anything else is snapped or rejected. */
 function cleanScore(score: number | undefined) {
-  if (score === undefined || !Number.isFinite(score)) {
+  if (isNil(score) || !Number.isFinite(score)) {
     return undefined;
   }
   const snapped = Math.round(Math.min(1, Math.max(0, score)) * 4) / 4;
@@ -126,7 +127,7 @@ export async function gradeQuiz(responses: Responses) {
   const pending: TextQuestion[] = [];
   for (const key of GRADED_BY_MODEL) {
     const shortcut = shortcutScore(responses[key], ANSWERS[key]);
-    if (shortcut === undefined) {
+    if (isNil(shortcut)) {
       pending.push(key);
     } else {
       scores[key] = shortcut;
@@ -148,7 +149,7 @@ export async function gradeQuiz(responses: Responses) {
     const fellBack: string[] = [];
     for (const key of pending) {
       const score = cleanScore(reported.get(key));
-      if (score === undefined) {
+      if (isNil(score)) {
         fellBack.push(key);
         scores[key] = fallbackScore(responses[key], ANSWERS[key]);
       } else {

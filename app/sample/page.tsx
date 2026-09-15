@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { LoaderCircleIcon } from "lucide-react";
+import { isNil } from "lodash";
 import { apiClient } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -202,7 +203,7 @@ export default function Sample() {
     setFailed(false);
   };
 
-  const graded = results !== null;
+  const graded = !isNil(results);
   const total = results
     ? Math.round(
         Object.values(results).reduce((sum, { points }) => sum + points, 0) *
