@@ -1,6 +1,7 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import betterTailwindcss from "eslint-plugin-better-tailwindcss";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -16,6 +17,11 @@ const eslintConfig = defineConfig([
         version: "19.2.8",
       },
     },
+  },
+  {
+    plugins: { "better-tailwindcss": betterTailwindcss },
+    rules: { "better-tailwindcss/enforce-canonical-classes": "warn" },
+    settings: { "better-tailwindcss": { entryPoint: "app/globals.css" } },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
