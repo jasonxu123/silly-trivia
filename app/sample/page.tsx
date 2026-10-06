@@ -55,21 +55,29 @@ function unansweredQuestions(responses: Responses) {
   );
 }
 
-function isGraded(question: Question | GradedQuestion): question is GradedQuestion {
+function isGraded(
+  question: Question | GradedQuestion,
+): question is GradedQuestion {
   return "pointsEarned" in question;
 }
 
+/** A numbered question card. The footer spans the full width, under the number too. */
 function QuestionRow({
   number,
+  footer,
   children,
 }: {
   number: number;
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <li className="flex gap-3">
-      <div className="w-5 shrink-0 font-semibold">{number}.</div>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
+    <li className="flex flex-col gap-2 rounded-sm border bg-card p-5">
+      <div className="flex gap-3">
+        <div className="w-5 shrink-0 font-semibold">{number}.</div>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
+      </div>
+      {footer}
     </li>
   );
 }
@@ -217,9 +225,11 @@ function HintControls({
           {pending && <LoaderCircleIcon className="animate-spin" />}
         </Button>
       )}
-      {hintsUsed > 0 && <div className="text-sm text-muted-foreground">
-        {pluralize("hint", hintsUsed, true)} used
-      </div>}
+      {hintsUsed > 0 && (
+        <div className="text-sm text-muted-foreground">
+          {pluralize("hint", hintsUsed, true)} used
+        </div>
+      )}
       <Tooltip>
         <TooltipTrigger
           render={
@@ -235,7 +245,9 @@ function HintControls({
         <TooltipContent>
           <div>
             Each hint used lowers the max points this question can earn by{" "}
-            <span className="font-semibold">{penalty}</span>. Currently: {round(remaining)} / {pluralize("point", question.pointsWorth, true)} remaining.
+            <span className="font-semibold">{penalty}</span>. Currently:{" "}
+            {round(remaining)} /{" "}
+            {pluralize("point", question.pointsWorth, true)} remaining.
           </div>
         </TooltipContent>
       </Tooltip>
@@ -293,35 +305,42 @@ function Feedback({
         resetting ? CONCEAL_CLASS : REVEAL_CLASS,
       )}
     >
-      <div className="flex flex-col gap-1 overflow-hidden">
-        <div className={cn("font-semibold", statusClass)}>
-          {full ? "✓ Correct!" : partial ? "◐ Partial" : "✗ Incorrect"}
-        </div>
-        <div>answer: {answer}</div>
-        <div className="grid w-fit grid-cols-[auto_auto] gap-x-8 text-sm tabular-nums">
-          {deductions.length > 0 && (
-            <>
-              <div className="text-muted-foreground">Max possible</div>
-              <div className="text-right">{pointsWorth}</div>
-              {deductions.map(({ label, points }) => (
-                <Fragment key={label}>
-                  <div className="text-muted-foreground">{label}</div>
-                  <div className="text-right text-red-700">
-                    −{round(points)}
-                  </div>
-                </Fragment>
-              ))}
-            </>
-          )}
-          <div
-            className={cn(
-              "col-span-2 grid grid-cols-subgrid font-semibold",
-              deductions.length > 0 && "mt-0.5 border-t pt-0.5",
+      {/* The tinted block's padding sits inside the clipped div so the
+          slide-open animation can collapse it. */}
+      <div className="overflow-hidden">
+        <div className="flex flex-col gap-1 rounded-sm bg-feedback pt-2.5 pb-3 px-4 mt-2">
+          <div className={cn("font-semibold", statusClass)}>
+            {full ? "✓ Correct!" : partial ? "◐ Partial" : "✗ Incorrect"}
+          </div>
+          <div>
+            <span className="italic">answer:</span>{" "}
+            <span className="font-medium">{answer}</span>
+          </div>
+          <div className="grid w-fit grid-cols-[auto_auto] gap-x-8 text-sm tabular-nums">
+            {deductions.length > 0 && (
+              <>
+                <div className="text-muted-foreground">Max possible</div>
+                <div className="text-right">{pointsWorth}</div>
+                {deductions.map(({ label, points }) => (
+                  <Fragment key={label}>
+                    <div className="text-muted-foreground">{label}</div>
+                    <div className="text-right text-red-700">
+                      −{round(points)}
+                    </div>
+                  </Fragment>
+                ))}
+              </>
             )}
-          >
-            <div>Earned</div>
-            <div className={cn("text-right", statusClass)}>
-              {round(earned)} / {pointsWorth}
+            <div
+              className={cn(
+                "col-span-2 grid grid-cols-subgrid font-semibold",
+                deductions.length > 0 && "mt-0.5 border-t pt-0.5",
+              )}
+            >
+              <div>Earned</div>
+              <div className={cn("text-right", statusClass)}>
+                {round(earned)} / {pointsWorth}
+              </div>
             </div>
           </div>
         </div>
@@ -469,10 +488,22 @@ export default function Sample() {
         )}
       </div>
 
-      <form className="flex flex-col gap-8" onSubmit={onSubmit}>
-        <ol className="grid grid-cols-[repeat(auto-fit,minmax(22rem,1fr))] gap-8">
+      <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+        <ol className="grid grid-cols-[repeat(auto-fit,minmax(22rem,1fr))] gap-4">
           {questions.map((question, index) => (
-            <QuestionRow key={question.id} number={index + 1}>
+            <QuestionRow
+              key={question.id}
+              number={index + 1}
+              footer={
+                isGraded(question) && (
+                  <Feedback
+                    question={question}
+                    hintsUsed={hintsUsed[question.id] ?? 0}
+                    resetting={resetting}
+                  />
+                )
+              }
+            >
               <div>{question.label}</div>
               {question.attachments && (
                 <Attachments attachments={question.attachments} />
@@ -489,20 +520,13 @@ export default function Sample() {
               )}
               {(question.hasHint || (hintsUsed[question.id] ?? 0) > 0) &&
                 !graded && (
-                <HintControls
-                  question={question}
-                  hintsUsed={hintsUsed[question.id] ?? 0}
-                  pending={hintPending === question.id}
-                  onAskForHint={() => onAskForHint(question.id)}
-                />
-              )}
-              {isGraded(question) && (
-                <Feedback
-                  question={question}
-                  hintsUsed={hintsUsed[question.id] ?? 0}
-                  resetting={resetting}
-                />
-              )}
+                  <HintControls
+                    question={question}
+                    hintsUsed={hintsUsed[question.id] ?? 0}
+                    pending={hintPending === question.id}
+                    onAskForHint={() => onAskForHint(question.id)}
+                  />
+                )}
             </QuestionRow>
           ))}
         </ol>
@@ -512,7 +536,7 @@ export default function Sample() {
             key="reset"
             type="button"
             variant="outline"
-            className="ml-8 self-start"
+            className="self-start"
             onClick={onReset}
           >
             Reset
@@ -521,7 +545,7 @@ export default function Sample() {
           <Button
             key="submit"
             type="submit"
-            className="ml-8 self-start"
+            className="self-start"
             disabled={pending}
           >
             {pending ? "Grading..." : "Submit"}
