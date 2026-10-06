@@ -1,6 +1,6 @@
 import { isNil } from "lodash";
 import type { Grade } from "@/lib/contracts/grader";
-import { GRADER_MODEL, llmScore } from "@/lib/gemini";
+import { GRADER_MODEL, getLlmScore } from "@/lib/gemini";
 import { totalHints } from "@/lib/hints";
 import {
   QUESTIONS,
@@ -24,6 +24,12 @@ type Solution = {
    * quarters. Without one, a text question is graded by substring matching.
    */
   rubric?: string;
+  /**
+   * Settles the answers a rule handles better than the model. Gets the
+   * normalized text answer; returns a score from 0 to 1 when the answer is one
+   * it covers, or undefined to leave it to the rubric or substring matching.
+   */
+  maybeCalcCustomScore?: (given: string) => number | undefined;
   /** Shown in place of the question's attachments once the answer is revealed. */
   revealAttachments?: Attachment[];
 };
@@ -45,7 +51,17 @@ Any other city or place scores 0.`,
 Both halves must be right. Naming only the rank ("king") or only the suit ("diamonds") scores 0.
 "King of Diamonds" scores 1 in any capitalisation.
 Readable shorthand also scores 1, in either order, with or without "of", and with the suit singular or plural: "K of diamonds", "K diamond", "king diamonds", "diamond king", "KD".
+Read each letter literally before scoring: K is King, Q is Queen, J is Jack, A is Ace; D is Diamonds, H is Hearts, S is Spades, C is Clubs. Q is never King.
 Any other card scores 0.`,
+    // The model reads any two letters as shorthand for the right card ("q d",
+    // "jd"), so two-letter answers are settled here: only K and D, either order.
+    maybeCalcCustomScore: (given) => {
+      const letters = given.replace(/\s/g, "");
+      if (!/^[a-z]{2}$/.test(letters)) {
+        return undefined;
+      }
+      return letters === "kd" || letters === "dk" ? 1 : 0;
+    },
     revealAttachments: [
       {
         url: "https://aibnr2rvln5mpgsf.public.blob.vercel-storage.com/q4/ef502366-84bd-4e75-80db-495fc9dba3f9.jpg",
@@ -74,15 +90,19 @@ function round(points: number) {
 }
 
 /** Text questions hold a single answer; anything past the first is ignored. */
-function textResponse(responses: Responses, id: string) {
+function getTextResponse(responses: Responses, id: string) {
   return responses[id]?.[0] ?? "";
 }
 
 /**
- * Cases a rule settles without the model: a blank answer, or an exact match
- * against an accepted answer. Undefined when neither rule applies.
+ * Cases a rule settles without the model: a blank answer, an exact match
+ * against an accepted answer, or one the question's maybeCalcCustomScore
+ * covers. Undefined when no rule applies.
  */
-function ruleBasedScore(response: string, answers: string[]) {
+function getRuleBasedScore(
+  response: string,
+  { answers, maybeCalcCustomScore }: Solution,
+) {
   const given = normalize(response);
   if (given === "") {
     return 0;
@@ -90,7 +110,7 @@ function ruleBasedScore(response: string, answers: string[]) {
   if (answers.some((answer) => normalize(answer) === given)) {
     return 1;
   }
-  return undefined;
+  return maybeCalcCustomScore?.(given);
 }
 
 /**
@@ -106,7 +126,7 @@ function cleanUpScore(score: number | undefined) {
 }
 
 /** Substring grader, used whenever the model can't be trusted or isn't asked. */
-function defaultScore(response: string, answers: string[]) {
+function calcDefaultScore(response: string, answers: string[]) {
   const given = normalize(response);
   const scores = answers.map((answer) => {
     const expected = normalize(answer);
@@ -142,7 +162,7 @@ function buildInput(pending: Question[], responses: Responses) {
       `Question: ${question.label}`,
       `Expected answer: ${solution.answers.join(" / ")}`,
       `Rubric:\n${solution.rubric}`,
-      `Student answer: ${textResponse(responses, question.id)}`,
+      `Student answer: ${getTextResponse(responses, question.id)}`,
     ].join("\n");
   });
 
@@ -162,7 +182,8 @@ export async function gradeQuiz(responses: Responses) {
   // Only free-text answers need the model, and only those no rule settles.
   const pending: Question[] = [];
   for (const question of QUESTIONS) {
-    const { answers, rubric } = SOLUTIONS[question.id];
+    const solution = SOLUTIONS[question.id];
+    const { answers, rubric } = solution;
 
     if (question.type !== "text") {
       fractions[question.id] = gradeChoices(
@@ -172,12 +193,12 @@ export async function gradeQuiz(responses: Responses) {
       continue;
     }
 
-    const response = textResponse(responses, question.id);
-    const ruled = ruleBasedScore(response, answers);
+    const response = getTextResponse(responses, question.id);
+    const ruled = getRuleBasedScore(response, solution);
     if (!isNil(ruled)) {
       fractions[question.id] = ruled;
     } else if (isNil(rubric)) {
-      fractions[question.id] = defaultScore(response, answers);
+      fractions[question.id] = calcDefaultScore(response, answers);
     } else {
       pending.push(question);
     }
@@ -185,12 +206,12 @@ export async function gradeQuiz(responses: Responses) {
 
   let summary: string;
   if (pending.length === 0) {
-    summary = "Graded without the model — every answer was blank or exact.";
+    summary = "Graded without the model — a rule settled every answer.";
   } else {
     let reported = new Map<string, number>();
     let failed = false;
     try {
-      reported = await llmScore(buildInput(pending, responses));
+      reported = await getLlmScore(buildInput(pending, responses));
     } catch {
       failed = true;
     }
@@ -200,8 +221,8 @@ export async function gradeQuiz(responses: Responses) {
       const score = cleanUpScore(reported.get(question.id));
       if (isNil(score)) {
         fellBack.push(question.id);
-        fractions[question.id] = defaultScore(
-          textResponse(responses, question.id),
+        fractions[question.id] = calcDefaultScore(
+          getTextResponse(responses, question.id),
           SOLUTIONS[question.id].answers,
         );
       } else {
