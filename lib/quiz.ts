@@ -74,7 +74,7 @@ export const QUESTIONS: Question[] = [
     id: "q3",
     type: "multiple",
     label: "Which of these are officially big cats?",
-    pointsWorth: 1,
+    pointsWorth: 2,
     hasHint: false,
     choices: [
       { value: "jaguar", label: "Jaguar" },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { CircleQuestionMarkIcon, LoaderCircleIcon } from "lucide-react";
 import { isNil } from "lodash";
 import pluralize from "pluralize";
@@ -256,14 +256,35 @@ function Feedback({
   // Correct/partial/incorrect describes the answer, so it reads the graded
   // fraction; the points shown are what the hints taken left it worth.
   const fraction = pointsWorth > 0 ? pointsEarned / pointsWorth : 0;
-  const earned = round(pointsAfterHints(question, hintsUsed));
   const full = fraction >= 1;
   const partial = fraction > 0 && !full;
+
+  // The breakdown runs worth → minus hints → minus the answer's misses, so each
+  // deduction is taken from what the step before it left.
+  const afterHints = maxPoints(question, hintsUsed);
+  const earned = pointsAfterHints(question, hintsUsed);
+  const deductions = [
+    {
+      label: `${pluralize("hint", hintsUsed, true)} × ${question.hintPenalty ?? 0}`,
+      points: pointsWorth - afterHints,
+    },
+    {
+      label: partial
+        ? `Answer ${Math.round(fraction * 100)}% right`
+        : "Wrong answer",
+      points: afterHints - earned,
+    },
+  ].filter(({ points }) => round(points) > 0);
 
   // Choice answers read as a set; text answers as alternatives that all score full marks.
   const labels = answerLabels(question, question.correctAnswer);
   const answer =
     question.type === "text" ? OR_LIST.format(labels) : AND_LIST.format(labels);
+  const statusClass = full
+    ? "text-green-700"
+    : partial
+      ? "text-amber-600"
+      : "text-red-700";
 
   return (
     <div
@@ -272,29 +293,37 @@ function Feedback({
         resetting ? CONCEAL_CLASS : REVEAL_CLASS,
       )}
     >
-      <div className="overflow-hidden">
-        <div
-          className={cn(
-            "font-semibold",
-            full
-              ? "text-green-700"
-              : partial
-                ? "text-amber-600"
-                : "text-red-700",
+      <div className="flex flex-col gap-1 overflow-hidden">
+        <div className={cn("font-semibold", statusClass)}>
+          {full ? "✓ Correct!" : partial ? "◐ Partial" : "✗ Incorrect"}
+        </div>
+        <div>answer: {answer}</div>
+        <div className="grid w-fit grid-cols-[auto_auto] gap-x-8 text-sm tabular-nums">
+          {deductions.length > 0 && (
+            <>
+              <div className="text-muted-foreground">Max possible</div>
+              <div className="text-right">{pointsWorth}</div>
+              {deductions.map(({ label, points }) => (
+                <Fragment key={label}>
+                  <div className="text-muted-foreground">{label}</div>
+                  <div className="text-right text-red-700">
+                    −{round(points)}
+                  </div>
+                </Fragment>
+              ))}
+            </>
           )}
-        >
-          {full
-            ? `✓ Correct! ${earned} / ${pointsWorth}`
-            : partial
-              ? `◐ Partial: ${earned} / ${pointsWorth}`
-              : `✗ Incorrect: ${earned} / ${pointsWorth}`}
-          <div>answer: {answer}</div>
-          {hintsUsed > 0 && (
-            <div className="font-normal text-muted-foreground">
-              {hintsUsed} / {pluralize("hint", question.totalHints, true)} used, for max of{" "}
-              {round(maxPoints(question, hintsUsed))} pts
+          <div
+            className={cn(
+              "col-span-2 grid grid-cols-subgrid font-semibold",
+              deductions.length > 0 && "mt-0.5 border-t pt-0.5",
+            )}
+          >
+            <div>Earned</div>
+            <div className={cn("text-right", statusClass)}>
+              {round(earned)} / {pointsWorth}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
