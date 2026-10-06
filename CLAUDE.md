@@ -20,6 +20,10 @@ Use `<div>` for blocks of text. No `<p>` or `<h1>`–`<h6>` — size, weight, an
 
 Elements picked for behavior rather than text stay as they are: `<label>`, `<button>`, `<input>`, `<form>`, and list structure.
 
+## Function names
+
+Name functions starting with a verb: `getHint`, `calcDefaultScore`, `normalize`. A function that may decline to return a result starts with `maybe` (`maybeCalcCustomScore`).
+
 ## Package manager
 
 This project uses Yarn (see `packageManager` in `package.json`). Use Yarn for every package operation unless it is genuinely impossible:
