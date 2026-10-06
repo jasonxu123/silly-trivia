@@ -185,10 +185,11 @@ function Answer({
 }
 
 /**
- * Asks for the next hint. The question's own hasHint decides whether it shows,
- * so it disappears by itself once the last hint has been taken.
+ * Asks for the next hint and tallies the ones taken. The question's own hasHint
+ * decides whether the button shows, so it disappears by itself once the last
+ * hint has been taken; the tally and its tooltip stay.
  */
-function HintButton({
+function HintControls({
   question,
   hintsUsed,
   pending,
@@ -204,16 +205,21 @@ function HintButton({
 
   return (
     <div className="flex items-center gap-2">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={pending}
-        onClick={onAskForHint}
-      >
-        {hintsUsed === 0 ? "Get hint" : "Get another hint"}
-        {pending && <LoaderCircleIcon className="animate-spin" />}
-      </Button>
+      {question.hasHint && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={onAskForHint}
+        >
+          {hintsUsed === 0 ? "Get hint" : "Get another hint"}
+          {pending && <LoaderCircleIcon className="animate-spin" />}
+        </Button>
+      )}
+      {hintsUsed > 0 && <div className="text-sm text-muted-foreground">
+        {pluralize("hint", hintsUsed, true)} used
+      </div>}
       <Tooltip>
         <TooltipTrigger
           render={
@@ -227,9 +233,10 @@ function HintButton({
           <CircleQuestionMarkIcon className="size-4" />
         </TooltipTrigger>
         <TooltipContent>
-          Each hint you ask for lowers the points this question can earn, by{" "}
-          {penalty}. It is currently worth up to {round(remaining)} of{" "}
-          {question.pointsWorth}.
+          <div>
+            Each hint used lowers the max points this question can earn by{" "}
+            <span className="font-semibold">{penalty}</span>. Currently: {round(remaining)} / {pluralize("point", question.pointsWorth, true)} remaining.
+          </div>
         </TooltipContent>
       </Tooltip>
     </div>
@@ -284,9 +291,8 @@ function Feedback({
           <div>answer: {answer}</div>
           {hintsUsed > 0 && (
             <div className="font-normal text-muted-foreground">
-              {hintsUsed} {pluralize("hint", hintsUsed)} used of{" "}
-              {question.totalHints}, capping this question at{" "}
-              {round(maxPoints(question, hintsUsed))}
+              {hintsUsed} / {pluralize("hint", question.totalHints, true)} used, for max of{" "}
+              {round(maxPoints(question, hintsUsed))} pts
             </div>
           )}
         </div>
@@ -413,7 +419,7 @@ export default function Sample() {
     <main className="mx-auto flex w-full max-w-304 flex-col gap-8 p-8 font-sans">
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1">
-          <div className="text-2xl font-semibold">Sample quiz</div>
+          <div className="text-2xl font-semibold">An example</div>
           {graded && (
             <div
               className={cn(
@@ -452,8 +458,9 @@ export default function Sample() {
                   hint: {question.hintLabel}
                 </div>
               )}
-              {question.hasHint && !graded && (
-                <HintButton
+              {(question.hasHint || (hintsUsed[question.id] ?? 0) > 0) &&
+                !graded && (
+                <HintControls
                   question={question}
                   hintsUsed={hintsUsed[question.id] ?? 0}
                   pending={hintPending === question.id}
