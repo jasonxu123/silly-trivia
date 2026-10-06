@@ -272,21 +272,24 @@ function Feedback({
   const partial = fraction > 0 && !full;
 
   // The breakdown runs worth → minus hints → minus the answer's misses, so each
-  // deduction is taken from what the step before it left.
+  // deduction is taken from what the step before it left. A wrong answer earns
+  // nothing whatever the hints, so it gets no breakdown.
   const afterHints = maxPoints(question, hintsUsed);
   const earned = pointsAfterHints(question, hintsUsed);
-  const deductions = [
-    {
-      label: `${pluralize("hint", hintsUsed, true)} × ${question.hintPenalty ?? 0}`,
-      points: pointsWorth - afterHints,
-    },
-    {
-      label: partial
-        ? `Answer ${Math.round(fraction * 100)}% right`
-        : "Wrong answer",
-      points: afterHints - earned,
-    },
-  ].filter(({ points }) => round(points) > 0);
+  const deductions = (
+    fraction > 0
+      ? [
+          {
+            label: `${pluralize("hint", hintsUsed, true)} × ${question.hintPenalty ?? 0}`,
+            points: pointsWorth - afterHints,
+          },
+          {
+            label: `Answer ${Math.round(fraction * 100)}% right`,
+            points: afterHints - earned,
+          },
+        ]
+      : []
+  ).filter(({ points }) => round(points) > 0);
 
   // Choice answers read as a set; text answers as alternatives that all score full marks.
   const labels = answerLabels(question, question.correctAnswer);
